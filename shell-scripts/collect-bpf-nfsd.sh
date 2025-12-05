@@ -8,7 +8,7 @@ graphiteify() {
 	echo $1 | tr '.' '_'
 }
 gtmpfile='/tmp/graphite-nfsclients'
-gprefix="nfs,$(graphiteify $(hostname -f)).clients"
+gprefix="nfs.$(graphiteify $(hostname -f)).clients"
 
 HELP="Usage: collect-bpf-nfsd.sh [OPTIONS]
 

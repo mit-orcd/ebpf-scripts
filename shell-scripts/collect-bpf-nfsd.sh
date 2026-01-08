@@ -28,28 +28,49 @@ Optional:
 
 to_ipv4() {
 	local num=$1
-	local x1=$((num%256))
-	num=$((num/256))
-	local x2=$((num%256))
-	num=$((num/256))
-	local x3=$((num%256))
-	num=$((num/256))
-	local x4=$((num%256))
+	local x1=$(( num & 0xff ))
+	local x2=$(( (num >> 8) & 0xff ))
+	local x3=$(( (num >> 16) & 0xff ))
+	local x4=$(( (num >> 24) & 0xff ))
 
 	echo "$x1.$x2.$x3.$x4"
 }
 
+to_ipv6() {
+	# TODO Test if formatting is correct
+	local hi=$1
+	local lo=$2
+
+	local x0=$(( (hi >> 48) & 0xffff ))
+    local x1=$(( (hi >> 32) & 0xffff ))
+    local x2=$(( (hi >> 16) & 0xffff ))
+    local x3=$((  hi        & 0xffff ))
+    local x4=$(( (lo >> 48) & 0xffff ))
+    local x5=$(( (lo >> 32) & 0xffff ))
+    local x6=$(( (lo >> 16) & 0xffff ))
+    local x7=$((  lo        & 0xffff ))
+
+	local ipv6
+	printf -v ipv6 "%x:%x:%x:%x:%x:%x:%x:%x" \
+		$x0 $x1 $x2 $x3 $x4 $x5 $x6 $x7
+
+	echo "$ipv6"
+}
+
 telegraf() {
 	echo "count,uid,ip"
-	# bpftrace -q - < "$bpfscript" | grep -v "Lost" | sed '/^$/d' | awk '{print $3, $4}' | sort | uniq -c | awk '{print $1","$2","$3}'
-
-	# todo - see how to deal with lost packages
-	bpftrace -q - < "$bpfscript" | sed '/^$/d' | awk -F'[\\[,\\]: ]' '{print $7","$4","$2}' | \
-	while IFS=, read -r count ip uid; do
-        echo "${count},${uid},$(to_ipv4 "$ip")"
-    done
-
-	# TODO check type to decide if ipv4 or ipv6
+	
+	bpftrace -q - < "$bpfscript" | sed '/^$/d' | awk -F'[\\[,\\]: ]' '{print $9","$2","$4","$1","$6}' | \
+	while IFS=, read -r count uid ip iptype iprest; do
+	    if [ "$iptype" = "@ip4" ]; then
+	        echo "${count},${uid},$(to_ipv4 "${ip}")"
+	 	elif [ "$iptype" = "@ip6" ]; then
+			#TODO Test if IPv6 formatting is correct
+			echo "${count},${uid},$(to_ipv6 "${ip}" "${iprest}")"
+		else
+			echo "Error, invalid ip type: ${iptype}" >&2
+		fi
+	done
 }
 
 graphite() {

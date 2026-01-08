@@ -31,34 +31,19 @@ kprobe:nfsd4_encode_operation {
     // Print the IP address, works for v4 or v6
     if ($sa->sa_family == 2) {  // AF_INET (IPv4)
         $sin = (struct sockaddr_in *)$addr_ptr;
-        /*printf("%s %u %u %d.%d.%d.%d\n",
-            strftime("%Y-%m-%dT%H:%M:%S", nsecs),
-            $op->opnum,
-            $uid,
-            ($sin->sin_addr.s_addr >> 0) & 0xff,
-            ($sin->sin_addr.s_addr >> 8) & 0xff,
-            ($sin->sin_addr.s_addr >> 16) & 0xff,
-            ($sin->sin_addr.s_addr >> 24) & 0xff);*/
 
-        @ip4[$uid,$sin->sin_addr.s_addr] = count();
+        @ip4[$uid,$sin->sin_addr.s_addr,0] = count();
 
     } else if ($sa->sa_family == 10) {  // AF_INET6 (IPv6)
         $sin6 = (struct sockaddr_in6 *)$addr_ptr;
-        /*printf("%s %u %u %04x:%04x:%04x:%04x:%04x:%04x:%04x:%04x\n",
-            strftime("%Y-%m-%dT%H:%M:%S", nsecs),
-            $op->opnum,
-            $uid,
-            bswap($sin6->sin6_addr.in6_u.u6_addr16[0]),
-            bswap($sin6->sin6_addr.in6_u.u6_addr16[1]),
-            bswap($sin6->sin6_addr.in6_u.u6_addr16[2]),
-            bswap($sin6->sin6_addr.in6_u.u6_addr16[3]),
-            bswap($sin6->sin6_addr.in6_u.u6_addr16[4]),
-            bswap($sin6->sin6_addr.in6_u.u6_addr16[5]),
-            bswap($sin6->sin6_addr.in6_u.u6_addr16[6]),
-            bswap($sin6->sin6_addr.in6_u.u6_addr16[7]));*/
 
-        // TODO: Test if something like this works for ipv6
-        @ip6[$uid,$sin6->sin6_addr.in6_u] = count(); 
+        $w0 = bswap($sin6->sin6_addr.in6_u.u6_addr32[0]);
+        $w1 = bswap($sin6->sin6_addr.in6_u.u6_addr32[1]);
+        $w2 = bswap($sin6->sin6_addr.in6_u.u6_addr32[2]);
+        $w3 = bswap($sin6->sin6_addr.in6_u.u6_addr32[3]);
+        $hi = ($w0 << 32) | $w1;
+        $lo = ($w2 << 32) | $w3;
+        @ip6[$uid, $hi, $lo] = count();
     }
 }
 

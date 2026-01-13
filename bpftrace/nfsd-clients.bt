@@ -14,9 +14,9 @@ struct nfsd4_op {
     u32 opnum;
 };
 
-kprobe:nfsd4_encode_operation {
-    $res = (struct nfsd4_compoundres *)arg0;
-    $op = (struct nfsd4_op *)arg1;
+fentry:nfsd4_encode_operation {
+    $res = args.resp;
+    $op = args.op;
 
     // Pointer to the request struct
     $rqstp = (struct svc_rqst *)$res->rqstp;

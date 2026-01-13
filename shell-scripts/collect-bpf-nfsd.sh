@@ -5,10 +5,10 @@ bpfscript='/usr/local/sbin/bpf-nfsd.bt'
 
 # only used for graphite
 graphiteify() {
-	echo $1 | tr '.' '_'
+	echo "$1" | tr '.' '_'
 }
 gtmpfile='/tmp/graphite-nfsclients'
-gprefix="nfs.$(graphiteify $(hostname -f)).clients"
+gprefix="nfs.$(graphiteify "$(hostname -f)").clients"
 
 HELP="Usage: collect-bpf-nfsd.sh [OPTIONS]
 
@@ -80,11 +80,11 @@ graphite() {
 
 	# try to resolve ip addresses
 	for ipaddr in $(awk '{print $4}' "$gtmpfile" | sort | uniq); do
-		host=$(graphiteify $(dig +short -x $ipaddr | sed 's/\.$//'))
+		host=$(graphiteify "$(dig +short -x "$ipaddr" | sed 's/\.$//')")
 		if [ "$host" != "" ]; then
 			sed -i "s/ ${ipaddr}$/ ${host}/g" "$gtmpfile"
 		else
-			ip_under=$(graphiteify $ipaddr)
+			ip_under=$(graphiteify "$ipaddr")
 			sed -i "s/ ${ipaddr}$/ ${ip_under}/g" "$gtmpfile"
 		fi
 	done

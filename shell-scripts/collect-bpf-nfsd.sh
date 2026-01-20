@@ -1,7 +1,7 @@
 #!/bin/bash
 
 format='telegraf'
-bpfscript='/usr/local/sbin/bpf-nfsd.bt'
+bpfscript='/usr/local/sbin/bpf-nfsd-2.bt'
 
 # only used for graphite
 graphiteify() {
@@ -42,13 +42,13 @@ to_ipv6() {
 	local lo=$2
 
 	local x0=$(( (hi >> 48) & 0xffff ))
-    local x1=$(( (hi >> 32) & 0xffff ))
-    local x2=$(( (hi >> 16) & 0xffff ))
-    local x3=$((  hi        & 0xffff ))
-    local x4=$(( (lo >> 48) & 0xffff ))
-    local x5=$(( (lo >> 32) & 0xffff ))
-    local x6=$(( (lo >> 16) & 0xffff ))
-    local x7=$((  lo        & 0xffff ))
+	local x1=$(( (hi >> 32) & 0xffff ))
+	local x2=$(( (hi >> 16) & 0xffff ))
+	local x3=$((  hi        & 0xffff ))
+	local x4=$(( (lo >> 48) & 0xffff ))
+	local x5=$(( (lo >> 32) & 0xffff ))
+	local x6=$(( (lo >> 16) & 0xffff ))
+	local x7=$((  lo        & 0xffff ))
 
 	local ipv6
 	printf -v ipv6 "%x:%x:%x:%x:%x:%x:%x:%x" \
@@ -59,12 +59,12 @@ to_ipv6() {
 
 telegraf() {
 	echo "count,uid,ip"
-	
+
 	bpftrace -q - < "$bpfscript" | sed '/^$/d' | awk -F'[\\[,\\]: ]' '{print $9","$2","$4","$1","$6}' | \
 	while IFS=, read -r count uid ip iptype iprest; do
-	    if [ "$iptype" = "@ip4" ]; then
-	        echo "${count},${uid},$(to_ipv4 "${ip}")"
-	 	elif [ "$iptype" = "@ip6" ]; then
+		if [ "$iptype" = "@ip4" ]; then
+			echo "${count},${uid},$(to_ipv4 "${ip}")"
+		elif [ "$iptype" = "@ip6" ]; then
 			#TODO Test if IPv6 formatting is correct
 			echo "${count},${uid},$(to_ipv6 "${ip}" "${iprest}")"
 		else
@@ -76,31 +76,43 @@ telegraf() {
 graphite() {
 	timestamp=$(date +%s)
 
-	bpftrace -q - < "$bpfscript" | grep -v "Lost" | sed '/^$/d' | awk '{print $2, $3, $4}' | sort | uniq -c > "$gtmpfile"
+	# parse the bucketed format from bpftrace
+	bpftrace -q - < "$bpfscript" | sed '/^$/d' | awk -F'[\\[,\\]: ]' '{print $9","$2","$4","$1","$6}' | \
+	while IFS=, read -r count uid ip iptype iprest; do
+		local ipaddr
+		if [ "$iptype" = "@ip4" ]; then
+			ipaddr=$(to_ipv4 "$ip")
+		elif [ "$iptype" = "@ip6" ]; then
+			ipaddr=$(to_ipv6 "$ip" "$iprest")
+		else
+			echo "Error, invalid ip type: ${iptype}" >&2
+			continue
+		fi
+		echo "${uid} ${ipaddr} ${count}"
+	done > "$gtmpfile"
 
 	# try to resolve ip addresses
-	for ipaddr in $(awk '{print $4}' "$gtmpfile" | sort | uniq); do
+	for ipaddr in $(awk '{print $2}' "$gtmpfile" | sort | uniq); do
 		host=$(graphiteify "$(dig +short -x "$ipaddr" | sed 's/\.$//')")
 		if [ "$host" != "" ]; then
-			sed -i "s/ ${ipaddr}$/ ${host}/g" "$gtmpfile"
+			sed -i "s/${ipaddr}/${host}/g" "$gtmpfile"
 		else
 			ip_under=$(graphiteify "$ipaddr")
-			sed -i "s/ ${ipaddr}$/ ${ip_under}/g" "$gtmpfile"
+			sed -i "s/${ipaddr}/${ip_under}/g" "$gtmpfile"
 		fi
 	done
 
-	# try to resole uids
-	for uid in $(awk '{print $3}' "$gtmpfile" | sort | uniq); do
+	# try to resolve uids
+	for uid in $(awk '{print $1}' "$gtmpfile" | sort | uniq); do
 		uname=$(awk -F':' '{print $1, $3}' /etc/passwd | grep -w "$uid" | awk '{print $1}')
 		if [ "$uname" != "" ]; then
-			sed -i "s/ ${uid} / ${uname} /g" "$gtmpfile"
+			sed -i "s/${uid} /${uname} /g" "$gtmpfile"
 		fi
 	done
 
-	while read -r num opcode uid ipaddr; do
-		echo "${gprefix}.by-opcode.${opcode}.${uid}.${ipaddr} $num $timestamp"
-		echo "${gprefix}.by-client.${ipaddr}.${uid}.${opcode} $num $timestamp"
-		echo "${gprefix}.by-user.${uid}.${opcode}.$ipaddr $num $timestamp"
+	while read -r uid ipaddr num; do
+		echo "${gprefix}.by-client.${ipaddr}.${uid} $num $timestamp"
+		echo "${gprefix}.by-user.${uid}.$ipaddr $num $timestamp"
 	done < "$gtmpfile"
 
 	rm -f "$gtmpfile"

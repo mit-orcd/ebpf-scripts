@@ -2,6 +2,8 @@ package main
 
 import (
 	"log"
+	"os"
+	"os/signal"
 	"time"
 
 	"github.com/cilium/ebpf/link"
@@ -10,6 +12,9 @@ import (
 // run `go generate && go build` and then ./nfs-traffic-viewer
 
 func main() {
+
+	kill_sig := make(chan os.Signal, 1)
+	signal.Notify(kill_sig, os.Interrupt) // catch exiting program
 
 	// Load eBPF objects to the objs struct (not the kernel yet!)
 	var objs collectorObjects
@@ -30,20 +35,29 @@ func main() {
 	}
 	defer link.Close()
 
-	log.Printf("Program Loaded!")
+	log.Printf("Program Loaded!\n")
 
-	var key uint32 = 0
-	var count uint64
+	ticker := time.NewTicker(5 * time.Second) // tries to do exactly every 5 seconds, regardless of execution time
+	defer ticker.Stop()
 
-	for {
-		if err := objs.PktCount.Lookup(&key, &count); err != nil {
-			log.Fatal("map lookup:", err)
-		}
-		log.Printf("count=%d", count)
+	// every x seconds - gets all map data (flushes map), adds it to sliding window
+	for range ticker.C {
 
-		if count >= 100 {
-			break
-		}
-		time.Sleep(500*time.Millisecond)
+		select {
+			case <-ticker.C:
+				var key collectorKeyT
+				var	val uint64
+				
+				iterator := objs.collectorMaps.NfsOpsCounts.Iterate()
+
+				for iterator.Next(&key, &val) {
+					log.Printf("UID: %d | Inode: %d | Count: %d\n", key.Uid, key.Ino, val)
+				}
+
+			case <-kill_sig:
+				<-kill_sig
+				log.Printf("Exiting...")
+		
+		}		
 	}
 }

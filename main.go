@@ -40,7 +40,7 @@ func main() {
 	ticker := time.NewTicker(5 * time.Second) // tries to do exactly every 5 seconds, regardless of execution time
 	defer ticker.Stop()
 
-	// every x seconds - gets all map data (flushes map), adds it to sliding window
+	// to do: every x seconds - gets all map data (flushes map), adds it to sliding window
 	for range ticker.C {
 
 		select {
@@ -57,6 +57,7 @@ func main() {
 			case <-kill_sig:
 				<-kill_sig
 				log.Printf("Exiting...")
+				return
 		
 		}		
 	}

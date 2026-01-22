@@ -13,6 +13,7 @@
 #include "vmlinux.h"
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 
 struct key_t {
     __u64 ino;
@@ -24,6 +25,7 @@ struct key_t {
 // uid: rqstp->rq_cred.cr_uid.val
 // ip: rqstp->rq_addr
 // inode: cstate->current_fh.fh_dentry->d_inode->i_ino;
+// u->write.wr_bytes_written
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -33,16 +35,21 @@ struct {
 } nfs_ops_counts SEC(".maps");
 
 SEC("fentry/nfsd4_write")
-int write_ops(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
-              union nfsd4_op_u *u) {
+int BPF_PROG(write_ops, struct svc_rqst *rqstp,
+             struct nfsd4_compound_state *cstate, union nfsd4_op_u *u) {
+
     struct key_t key = {};
 
-    // read inode number
+    // read ino
     struct dentry *dentry_ptr = BPF_CORE_READ(cstate, current_fh.fh_dentry);
-    struct inode *inode_ptr = BPF_CORE_READ(dentry_ptr, d_inode);
+    if (!dentry_ptr) {
+        bpf_printk("Could not read dentry!\n");
+        return 0;
+    }
 
-    if (!dentry_ptr || !inode_ptr) {
-        // bpf_printk("Could not read inode!\n");
+    struct inode *inode_ptr = BPF_CORE_READ(dentry_ptr, d_inode);
+    if (!inode_ptr) {
+        bpf_printk("Could not read inode!\n");
         return 0;
     }
 
@@ -50,6 +57,7 @@ int write_ops(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 
     // read uid
     key.uid = BPF_CORE_READ(rqstp, rq_cred.cr_uid.val);
+    bpf_printk("nfs write %u\n", key.uid);
 
     __u64 *count = bpf_map_lookup_elem(&nfs_ops_counts, &key);
     if (count) {

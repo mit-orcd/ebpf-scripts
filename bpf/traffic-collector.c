@@ -71,18 +71,6 @@ int BPF_PROG(write_ops, struct svc_rqst *rqstp,
     if (val) {
         __sync_fetch_and_add(&val->requests, 1);
         __sync_fetch_and_add(&val->bytes, (__u64)bytes);
-        // Note: may instead add bytes written
-        // ! u->write.wr_bytes_written
-        /*
-           .wr_bytes_written is how much the server wrote, this can only be
-           accessed as fexit
-
-           .wr_payload contains the information of what the client sent
-           (accessed at fentry)
-             .len
-             .buflen
-        */
-
     } else {
         struct val_t init = {
             .requests = 1,

@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
-	"time"
 	"os/user"
+	"time"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -66,8 +66,8 @@ func updateTable(m *model) tea.Msg {
 		var username string
 		usrstr := fmt.Sprintf("%d", usr)
 		u, err := user.LookupId(usrstr)
-		if err != nil  {
-			// fall back to uid 
+		if err != nil {
+			// fall back to uid
 			username = usrstr
 		}
 		username = u.Username

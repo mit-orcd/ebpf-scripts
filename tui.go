@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/user"
 	"time"
+	"golang.org/x/term"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -33,6 +34,8 @@ type model struct {
 	table table.Model
 	sw    *SlidingWindow
 	objs  *collectorObjects
+	width int
+	height int
 }
 
 type updateTickMsg time.Time
@@ -41,6 +44,17 @@ func updateTableEvery(delay time.Duration) tea.Cmd {
 	return tea.Every(delay, func(t time.Time) tea.Msg {
 		return updateTickMsg(t)
 	})
+}
+
+func makeColumns(width int) []table.Column {
+        return []table.Column{
+                {Title: "USER", Width: width * 10 / 100},
+                {Title: "PATH", Width: width * 30 / 100},
+                {Title: "READS", Width: width * 10 / 100},
+                {Title: "RBYTES", Width: width * 10 / 100},
+                {Title: "WRITES", Width: width * 10 / 100},
+                {Title: "WBYTES", Width: width * 10 / 100},
+        }
 }
 
 func updateTable(m *model) tea.Msg {
@@ -57,6 +71,9 @@ func updateTable(m *model) tea.Msg {
 	// }
 
 	// fmt.Printf("\n\n==== LOG ====\n")
+
+	m.table.SetColumns(makeColumns(m.width))
+	m.table.SetHeight(m.height - 4) // subtract space for header/footer/borders
 
 	m.sw.total_summary.UpdateTotalWindow(m.objs.NfsOpsCounts)
 
@@ -116,7 +133,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				tea.Printf("Let's go to %s!", m.table.SelectedRow()[1]),
 			)
 		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
 	}
+
 	m.table, cmd = m.table.Update(msg)
 	return m, cmd
 }
@@ -133,14 +154,13 @@ func render(sw *SlidingWindow, objs *collectorObjects) {
 	// 	{Title: "Population", Width: 10},
 	// }
 
-	columns := []table.Column{
-		{Title: "UID", Width: 5},
-		{Title: "INO", Width: 8},
-		{Title: "READS", Width: 6},
-		{Title: "BYTES", Width: 8},
-		{Title: "WRITES", Width: 6},
-		{Title: "BYTES", Width: 8},
+	w, h, err := term.GetSize(0)
+	if err != nil {
+		fmt.Println("Could not get window size, making best guess")
+		w, h = 80, 25
 	}
+
+	columns := makeColumns(w)
 
 	rows := []table.Row{
 		{"1", "123", "1", "4096", "31", "51283491"},
@@ -150,7 +170,7 @@ func render(sw *SlidingWindow, objs *collectorObjects) {
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
-		table.WithHeight(7),
+		table.WithHeight(h - 5), // padding
 	)
 
 	s := table.DefaultStyles()
@@ -165,7 +185,7 @@ func render(sw *SlidingWindow, objs *collectorObjects) {
 		Bold(false)
 	t.SetStyles(s)
 
-	m := model{t, sw, objs}
+	m := model{t, sw, objs, w, h}
 	if _, err := tea.NewProgram(&m, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Println("Error running program:", err)
 		os.Exit(1)

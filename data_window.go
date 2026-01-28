@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	//"fmt"
 	"log"
 
 	"github.com/cilium/ebpf"
@@ -63,11 +63,11 @@ func (w WindowSummary) UpdateTotalWindow(ebpf_map *ebpf.Map) {
 			continue
 		}
 
-		fmt.Printf("UID: %d | Inode: %d | Requests: %d | Total Bytes: %d\n", k.Uid, k.Ino, val.W_requests, val.W_bytes)
+		//fmt.Printf("UID: %d | Inode: %d | Requests: %d | Total Bytes: %d\n", k.Uid, k.Ino, val.W_requests, val.W_bytes)
 
 		um, ok := w.m[k.Uid]
 		if !ok {
-			log.Print("Created new user")
+			//log.Print("Created new user")
 			um = UserMetrics{
 				files: make(map[uint64]FileMetrics),
 			}

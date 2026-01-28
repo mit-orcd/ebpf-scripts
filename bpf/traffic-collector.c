@@ -22,21 +22,17 @@ struct key_t {
 };
 
 struct val_t {
-    __u64 requests;
-    __u64 bytes;
+    __u64 w_requests;
+    __u64 w_bytes;
+    __u64 r_requests;
+    __u64 r_bytes;
 };
-
-// Values of interest (for reference):
-// uid: rqstp->rq_cred.cr_uid.val
-// ip: rqstp->rq_addr
-// inode: cstate->current_fh.fh_dentry->d_inode->i_ino;
-// u->write.wr_bytes_written
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __type(key, struct key_t);
     __type(value, struct val_t);
-    __uint(max_entries, 10240); // 10240 * (8+4+4 + 8) = 10240 * 24 = ~0.25 MB
+    __uint(max_entries, 10240);
 } nfs_ops_counts SEC(".maps");
 
 SEC("fentry/nfsd4_write")
@@ -45,7 +41,7 @@ int BPF_PROG(write_ops, struct svc_rqst *rqstp,
 
     struct key_t key = {};
 
-    // read ino
+    // get ino
     struct dentry *dentry_ptr = BPF_CORE_READ(cstate, current_fh.fh_dentry);
     if (!dentry_ptr) {
         bpf_printk("Could not read dentry!\n");
@@ -60,22 +56,66 @@ int BPF_PROG(write_ops, struct svc_rqst *rqstp,
 
     key.ino = BPF_CORE_READ(inode_ptr, i_ino);
 
-    // read uid
+    // get uid
     key.uid = BPF_CORE_READ(rqstp, rq_cred.cr_uid.val);
 
-    // read bytes
+    // get bytes
     __u32 bytes = BPF_CORE_READ(u, write.wr_payload.buflen);
     bpf_printk("nfs write %u\n", bytes);
 
     struct val_t *val = bpf_map_lookup_elem(&nfs_ops_counts, &key);
     if (val) {
-        __sync_fetch_and_add(&val->requests, 1);
-        __sync_fetch_and_add(&val->bytes, (__u64)bytes);
+        val->w_requests++;
+        val->w_bytes += bytes;
     } else {
-        struct val_t init = {
-            .requests = 1,
-            .bytes = (__u64)bytes,
-        };
+        struct val_t init = {.w_requests = 1,
+                             .w_bytes = (__u64)bytes,
+                             .r_requests = 0,
+                             .r_bytes = 0};
+        bpf_map_update_elem(&nfs_ops_counts, &key, &init, BPF_ANY);
+    }
+
+    return 0;
+}
+
+SEC("fentry/nfsd4_read")
+int BPF_PROG(read_ops, struct svc_rqst *rqstp,
+             struct nfsd4_compound_state *cstate, union nfsd4_op_u *u) {
+
+    bpf_printk("READ OPERATION");
+    struct key_t key = {};
+
+    // get ino
+    struct dentry *dentry_ptr = BPF_CORE_READ(cstate, current_fh.fh_dentry);
+    if (!dentry_ptr) {
+        bpf_printk("Could not read dentry!\n");
+        return 0;
+    }
+
+    struct inode *inode_ptr = BPF_CORE_READ(dentry_ptr, d_inode);
+    if (!inode_ptr) {
+        bpf_printk("Could not read inode!\n");
+        return 0;
+    }
+
+    key.ino = BPF_CORE_READ(inode_ptr, i_ino);
+
+    // get uid
+    key.uid = BPF_CORE_READ(rqstp, rq_cred.cr_uid.val);
+
+    // get bytes
+    __u32 bytes = BPF_CORE_READ(u, read.rd_length);
+    bpf_printk("nfs read %u\n", bytes);
+
+    struct val_t *val = bpf_map_lookup_elem(&nfs_ops_counts, &key);
+    if (val) {
+        val->r_requests++;
+        val->r_bytes += bytes;
+    } else {
+        struct val_t init = {.r_requests = 1,
+                             .r_bytes = (__u64)bytes,
+                             .w_requests = 0,
+                             .w_bytes = 0};
         bpf_map_update_elem(&nfs_ops_counts, &key, &init, BPF_ANY);
     }
 

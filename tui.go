@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"time"
+	"os/user"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -62,10 +63,18 @@ func updateTable(m *model) tea.Msg {
 	rows := make([]table.Row, 0)
 
 	for usr, files := range m.sw.total_summary.m {
+		var username string
+		usrstr := fmt.Sprintf("%d", usr)
+		u, err := user.LookupId(usrstr)
+		if err != nil  {
+			// fall back to uid 
+			username = usrstr
+		}
+		username = u.Username
 		for ino, metrics := range files.files {
 			// fmt.Printf("ino %d: r%d rb%d w%d wb%d\n", ino, metrics.r_ops_count, metrics.r_bytes, metrics.w_ops_count, metrics.w_bytes)
 			r := table.Row{
-				fmt.Sprintf("%d", usr),
+				username,
 				fmt.Sprintf("%d", ino),
 				fmt.Sprintf("%d", metrics.r_ops_count),
 				fmt.Sprintf("%d", metrics.r_bytes),

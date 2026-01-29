@@ -60,19 +60,6 @@ func makeColumns(width int) []table.Column {
 
 func updateTable(m *model) tea.Msg {
 
-	/* TODO: Change for bubble tea TUI */
-	// fmt.Print("\033[H\033[2J")
-	// log.Printf("Accumulated Writes:")
-
-	// for usr, files := range sw.total_summary.m {
-	// 	fmt.Printf("===== UID %d =====\n", usr)
-	// 	for ino, metrics := range files.files {
-	// 		fmt.Printf("ino %d: r%d rb%d w%d wb%d\n", ino, metrics.r_ops_count, metrics.r_bytes, metrics.w_ops_count, metrics.w_bytes)
-	// 	}
-	// }
-
-	// fmt.Printf("\n\n==== LOG ====\n")
-
 	m.table.SetColumns(makeColumns(m.width))
 	m.table.SetHeight(m.height - 4) // subtract space for header/footer/borders
 
@@ -81,19 +68,30 @@ func updateTable(m *model) tea.Msg {
 	rows := make([]table.Row, 0)
 
 	for usr, files := range m.sw.total_summary.m {
+
+		// uid to username resolution
 		var username string
 		usrstr := fmt.Sprintf("%d", usr)
 		u, err := user.LookupId(usrstr)
 		if err != nil {
 			// fall back to uid
 			username = usrstr
+		} else {
+			username = u.Username
 		}
-		username = u.Username
+
 		for ino, metrics := range files.files {
+
+			// ino to filename resolution
+			filename, ok := m.sw.ino_to_filenames[ino]
+			if !ok {
+				// fall back to ino
+				filename = fmt.Sprintf("%d", ino)
+			}
+
 			r := table.Row{
 				username,
-				fmt.Sprintf("%d", ino),
-				fmt.Sprintf("%s", m.sw.ino_to_filenames[ino]),
+				filename,
 				fmt.Sprintf("%d", metrics.r_ops_count),
 				fmt.Sprintf("%d", metrics.r_bytes),
 				fmt.Sprintf("%d", metrics.w_ops_count),
@@ -158,7 +156,7 @@ func render(sw *SlidingWindow, objs *collectorObjects) {
 	columns := makeColumns(w)
 
 	rows := []table.Row{
-		{"1", "123", "test", "1", "4096", "31", "51283491"},
+		{"1", "test", "1", "4096", "31", "51283491"},
 	}
 
 	t := table.New(

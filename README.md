@@ -9,7 +9,7 @@ You will also need llvm, clang, and kernel headers to compile BPF programs again
 
 On Red Hat variants:
 ```bash
-yum install kernel-headers-$(uname -r) llvm clang go
+yum install kernel-headers-$(uname -r) llvm clang go libbpf-devel
 ```
 
 ## Compiling and running 

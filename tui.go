@@ -44,29 +44,16 @@ func updateTableEvery(delay time.Duration) tea.Cmd {
 
 func updateTable(m *model) tea.Msg {
 
-	/* TODO: Change for bubble tea TUI */
-	// fmt.Print("\033[H\033[2J")
-	// log.Printf("Accumulated Writes:")
-
-	// for usr, files := range sw.total_summary.m {
-	// 	fmt.Printf("===== UID %d =====\n", usr)
-	// 	for ino, metrics := range files.files {
-	// 		fmt.Printf("ino %d: r%d rb%d w%d wb%d\n", ino, metrics.r_ops_count, metrics.r_bytes, metrics.w_ops_count, metrics.w_bytes)
-	// 	}
-	// }
-
-	// fmt.Printf("\n\n==== LOG ====\n")
-
 	m.sw.total_summary.UpdateTotalWindow(m.objs.NfsOpsCounts)
 
 	rows := make([]table.Row, 0)
 
 	for usr, files := range m.sw.total_summary.m {
 		for ino, metrics := range files.files {
-			// fmt.Printf("ino %d: r%d rb%d w%d wb%d\n", ino, metrics.r_ops_count, metrics.r_bytes, metrics.w_ops_count, metrics.w_bytes)
 			r := table.Row{
 				fmt.Sprintf("%d", usr),
 				fmt.Sprintf("%d", ino),
+				fmt.Sprintf("%s", m.sw.ino_to_filenames[ino]),
 				fmt.Sprintf("%d", metrics.r_ops_count),
 				fmt.Sprintf("%d", metrics.r_bytes),
 				fmt.Sprintf("%d", metrics.w_ops_count),
@@ -117,16 +104,11 @@ func (m *model) View() string {
 }
 
 func render(sw *SlidingWindow, objs *collectorObjects) {
-	// columns := []table.Column{
-	// 	{Title: "Rank", Width: 4},
-	// 	{Title: "City", Width: 10},
-	// 	{Title: "Country", Width: 10},
-	// 	{Title: "Population", Width: 10},
-	// }
 
 	columns := []table.Column{
 		{Title: "UID", Width: 5},
 		{Title: "INO", Width: 8},
+		{Title: "NAME", Width: 10},
 		{Title: "READS", Width: 6},
 		{Title: "BYTES", Width: 8},
 		{Title: "WRITES", Width: 6},
@@ -134,7 +116,7 @@ func render(sw *SlidingWindow, objs *collectorObjects) {
 	}
 
 	rows := []table.Row{
-		{"1", "123", "1", "4096", "31", "51283491"},
+		{"1", "123", "test", "1", "4096", "31", "51283491"},
 	}
 
 	t := table.New(

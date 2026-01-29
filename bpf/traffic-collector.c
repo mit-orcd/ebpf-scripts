@@ -1,6 +1,7 @@
 /**
  * to generate "vmlinux.h" run
- *      `bpftool btf dump file /sys/kernel/btf/vmlinux format c > bpf/vmlinux.h`
+ *      `bpftool btf dump file /sys/kernel/btf/vmlinux format c >
+ * bpf/vmlinux.h`
  *
  *  to generate "nfsd-btf.h" run
  *      `bpftool btf dump file /sys/kernel/btf/nfsd format c > bpf/nfsd-btf.h`
@@ -35,6 +36,17 @@ struct {
     __uint(max_entries, 10240);
 } nfs_ops_counts SEC(".maps");
 
+struct event {
+    __u64 ino;
+    Byte name[64];
+};
+
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 1 << 12);
+    __type(value, struct event);
+} events SEC(".maps");
+
 SEC("fentry/nfsd4_write")
 int BPF_PROG(write_ops, struct svc_rqst *rqstp,
              struct nfsd4_compound_state *cstate, union nfsd4_op_u *u) {
@@ -56,13 +68,21 @@ int BPF_PROG(write_ops, struct svc_rqst *rqstp,
 
     key.ino = BPF_CORE_READ(inode_ptr, i_ino);
 
+    // get filename
+    const unsigned char *name_ptr = BPF_CORE_READ(dentry_ptr, d_name.name);
+
+    char fname[64];
+    if (name_ptr)
+        bpf_probe_read_str(&fname, sizeof(fname), (const void *)name_ptr);
+
     // get uid
     key.uid = BPF_CORE_READ(rqstp, rq_cred.cr_uid.val);
 
     // get bytes
     __u32 bytes = BPF_CORE_READ(u, write.wr_payload.buflen);
-    bpf_printk("nfs write %u\n", bytes);
+    bpf_printk("nfs write %u to %s\n", bytes, name_ptr);
 
+    // update map
     struct val_t *val = bpf_map_lookup_elem(&nfs_ops_counts, &key);
     if (val) {
         val->w_requests++;
@@ -74,6 +94,13 @@ int BPF_PROG(write_ops, struct svc_rqst *rqstp,
                              .r_bytes = 0};
         bpf_map_update_elem(&nfs_ops_counts, &key, &init, BPF_ANY);
     }
+
+    // send filename
+    struct event ev = {};
+    ev.ino = key.ino;
+    __builtin_memcpy(ev.name, fname, sizeof(fname));
+
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
 
     return 0;
 }
@@ -100,6 +127,13 @@ int BPF_PROG(read_ops, struct svc_rqst *rqstp,
 
     key.ino = BPF_CORE_READ(inode_ptr, i_ino);
 
+    // get filename
+    const unsigned char *name_ptr = BPF_CORE_READ(dentry_ptr, d_name.name);
+
+    char fname[64];
+    if (name_ptr)
+        bpf_probe_read_str(&fname, sizeof(fname), (const void *)name_ptr);
+
     // get uid
     key.uid = BPF_CORE_READ(rqstp, rq_cred.cr_uid.val);
 
@@ -107,6 +141,7 @@ int BPF_PROG(read_ops, struct svc_rqst *rqstp,
     __u32 bytes = BPF_CORE_READ(u, read.rd_length);
     bpf_printk("nfs read %u\n", bytes);
 
+    // update map
     struct val_t *val = bpf_map_lookup_elem(&nfs_ops_counts, &key);
     if (val) {
         val->r_requests++;
@@ -118,6 +153,13 @@ int BPF_PROG(read_ops, struct svc_rqst *rqstp,
                              .w_bytes = 0};
         bpf_map_update_elem(&nfs_ops_counts, &key, &init, BPF_ANY);
     }
+
+    // send filename to ringbuf
+    struct event ev = {};
+    ev.ino = key.ino;
+    __builtin_memcpy(ev.name, fname, sizeof(fname));
+
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
 
     return 0;
 }

@@ -8,8 +8,6 @@ import (
 	"github.com/cilium/ebpf/link"
 )
 
-const time_per_query = 1
-
 func main() {
 
 	/* Load and Attach eBPF Programs */
@@ -45,6 +43,8 @@ func main() {
 
 	/* Window & Display Logic */
 	sw := InitWindow()
+
+	go sw.MaintainInodeResolution(objs.collectorMaps.Events)
 
 	render(&sw, &objs)
 

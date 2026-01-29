@@ -1,10 +1,13 @@
 package main
 
 import (
-	"fmt"
+	"bytes"
+	"encoding/binary"
+	"errors"
 	"log"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/ringbuf"
 )
 
 type SlidingWindow struct {
@@ -17,6 +20,8 @@ type SlidingWindow struct {
 	windows_max_quantity int // maximum number of windows to store
 
 	total_summary WindowSummary
+
+	ino_to_filenames map[uint64]string
 }
 
 type WindowSummary struct {
@@ -38,14 +43,44 @@ type FileMetrics struct {
 func InitWindow() SlidingWindow {
 	sw := SlidingWindow{}
 	sw.total_summary.m = make(map[uint32]UserMetrics)
+	sw.ino_to_filenames = make(map[uint64]string)
 
 	return sw
+}
+
+// Continually populates sw.ino_to_filenames using the ebpf ringbuffer
+func (sw SlidingWindow) MaintainInodeResolution(file_ringbuf *ebpf.Map) {
+	rd, err := ringbuf.NewReader(file_ringbuf)
+	if err != nil {
+		log.Fatalf("opening ringbuf reader: %s", err)
+	}
+	defer rd.Close()
+
+	var event collectorEvent
+	for {
+		record, err := rd.Read()
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				log.Println("Received close signal of ringbuf, exiting...")
+				return
+			}
+			log.Printf("reading ringbuf error: %s", err)
+			continue
+		}
+
+		if err := binary.Read(bytes.NewBuffer(record.RawSample), binary.LittleEndian, &event); err != nil {
+			log.Printf("parsing ringbuf event error: %s", err)
+			continue
+		}
+
+		// Log to file resolution map
+		sw.ino_to_filenames[event.Ino] = string(event.Name[:])
+	}
 }
 
 func (w WindowSummary) UpdateTotalWindow(ebpf_map *ebpf.Map) {
 	iterator := ebpf_map.Iterate()
 
-	// todo: implement two-buffer collections system
 	var keys []collectorKeyT
 
 	var valtmp collectorValT
@@ -63,11 +98,11 @@ func (w WindowSummary) UpdateTotalWindow(ebpf_map *ebpf.Map) {
 			continue
 		}
 
-		fmt.Printf("UID: %d | Inode: %d | Requests: %d | Total Bytes: %d\n", k.Uid, k.Ino, val.W_requests, val.W_bytes)
+		// fmt.Printf("UID: %d | Inode: %d | Requests: %d | Total Bytes: %d\n", k.Uid, k.Ino, val.W_requests, val.W_bytes)
 
 		um, ok := w.m[k.Uid]
 		if !ok {
-			log.Print("Created new user")
+			// log.Print("Created new user")
 			um = UserMetrics{
 				files: make(map[uint64]FileMetrics),
 			}

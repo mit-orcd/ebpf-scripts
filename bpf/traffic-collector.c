@@ -39,6 +39,7 @@ struct {
 struct event {
     __u64 ino;
     Byte name[64];
+    Byte pname[64];
 };
 
 struct {
@@ -46,6 +47,12 @@ struct {
     __uint(max_entries, 1 << 12);
     __type(value, struct event);
 } events SEC(".maps");
+
+// Currently, every read/write will send the filename to userspace, even if the
+// userspace already knows it
+// todo: implement a BPF_MAP_TYPE_LRU_HASH and add
+// logic so that events are not repeatedly sent to the ringbuf if inode filename
+// has been sent recently
 
 SEC("fentry/nfsd4_write")
 int BPF_PROG(write_ops, struct svc_rqst *rqstp,
@@ -70,13 +77,28 @@ int BPF_PROG(write_ops, struct svc_rqst *rqstp,
 
     // get filename
     const unsigned char *name_ptr = BPF_CORE_READ(dentry_ptr, d_name.name);
-
     char fname[64];
     if (name_ptr)
         bpf_probe_read_str(&fname, sizeof(fname), (const void *)name_ptr);
 
+    // get parent name
+    const unsigned char *pname_ptr =
+        BPF_CORE_READ(dentry_ptr, d_parent, d_name.name);
+    char pname[64];
+    if (pname_ptr)
+        bpf_probe_read_str(&pname, sizeof(pname), (const void *)pname_ptr);
+
     // get uid
     key.uid = BPF_CORE_READ(rqstp, rq_cred.cr_uid.val);
+
+    // get ipv4
+    // unsigned char addrbuf[16] = {};
+    // struct __kernel_sockaddr_storage sa = BPF_CORE_READ(rqstp, rq_addr);
+    // if (bpf_probe_read_kernel(&addrbuf, sizeof(addrbuf), &sa) == 0) {
+    //     unsigned short family = 0;
+    // } else {
+    //     key.ipv4 = 0; // default to no ip
+    // }
 
     // get bytes
     __u32 bytes = BPF_CORE_READ(u, write.wr_payload.buflen);
@@ -99,11 +121,17 @@ int BPF_PROG(write_ops, struct svc_rqst *rqstp,
     struct event ev = {};
     ev.ino = key.ino;
     __builtin_memcpy(ev.name, fname, sizeof(fname));
+    __builtin_memcpy(ev.pname, pname, sizeof(pname));
 
     bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
 
     return 0;
 }
+
+// note: due to cache, reading can become troublesome to test
+// you might want to run the following to drop page cache
+//      echo 3 > /proc/sys/vm/drop_caches
+// https://www.kernel.org/doc/Documentation/sysctl/vm.txt#:~:text=To%20free%20slab%20objects%20and%20pagecache%3A
 
 SEC("fentry/nfsd4_read")
 int BPF_PROG(read_ops, struct svc_rqst *rqstp,

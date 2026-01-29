@@ -74,7 +74,7 @@ func (sw SlidingWindow) MaintainInodeResolution(file_ringbuf *ebpf.Map) {
 		}
 
 		// Log to file resolution map
-		sw.ino_to_filenames[event.Ino] = string(event.Name[:bytes.IndexByte(event.Name[:], 0)]) // better way to do this?
+		sw.ino_to_filenames[event.Ino] = string(event.Pname[:bytes.IndexByte(event.Pname[:], 0)]) + "/" + string(event.Name[:bytes.IndexByte(event.Name[:], 0)]) // better way to do this?
 	}
 }
 

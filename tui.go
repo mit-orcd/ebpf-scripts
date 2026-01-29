@@ -3,7 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -29,9 +32,11 @@ var baseStyle = lipgloss.NewStyle().
 	BorderForeground(lipgloss.Color("240"))
 
 type model struct {
-	table table.Model
-	sw    *SlidingWindow
-	objs  *collectorObjects
+	table  table.Model
+	sw     *SlidingWindow
+	objs   *collectorObjects
+	width  int
+	height int
 }
 
 type updateTickMsg time.Time
@@ -42,16 +47,51 @@ func updateTableEvery(delay time.Duration) tea.Cmd {
 	})
 }
 
+func makeColumns(width int) []table.Column {
+	return []table.Column{
+		{Title: "USER", Width: width * 10 / 100},
+		{Title: "PATH", Width: width * 30 / 100},
+		{Title: "READS", Width: width * 10 / 100},
+		{Title: "RBYTES", Width: width * 10 / 100},
+		{Title: "WRITES", Width: width * 10 / 100},
+		{Title: "WBYTES", Width: width * 10 / 100},
+	}
+}
+
 func updateTable(m *model) tea.Msg {
+
+	/* TODO: Change for bubble tea TUI */
+	// fmt.Print("\033[H\033[2J")
+	// log.Printf("Accumulated Writes:")
+
+	// for usr, files := range sw.total_summary.m {
+	// 	fmt.Printf("===== UID %d =====\n", usr)
+	// 	for ino, metrics := range files.files {
+	// 		fmt.Printf("ino %d: r%d rb%d w%d wb%d\n", ino, metrics.r_ops_count, metrics.r_bytes, metrics.w_ops_count, metrics.w_bytes)
+	// 	}
+	// }
+
+	// fmt.Printf("\n\n==== LOG ====\n")
+
+	m.table.SetColumns(makeColumns(m.width))
+	m.table.SetHeight(m.height - 4) // subtract space for header/footer/borders
 
 	m.sw.total_summary.UpdateTotalWindow(m.objs.NfsOpsCounts)
 
 	rows := make([]table.Row, 0)
 
 	for usr, files := range m.sw.total_summary.m {
+		var username string
+		usrstr := fmt.Sprintf("%d", usr)
+		u, err := user.LookupId(usrstr)
+		if err != nil {
+			// fall back to uid
+			username = usrstr
+		}
+		username = u.Username
 		for ino, metrics := range files.files {
 			r := table.Row{
-				fmt.Sprintf("%d", usr),
+				username,
 				fmt.Sprintf("%d", ino),
 				fmt.Sprintf("%s", m.sw.ino_to_filenames[ino]),
 				fmt.Sprintf("%d", metrics.r_ops_count),
@@ -94,7 +134,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				tea.Printf("Let's go to %s!", m.table.SelectedRow()[1]),
 			)
 		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
 	}
+
 	m.table, cmd = m.table.Update(msg)
 	return m, cmd
 }
@@ -105,15 +149,13 @@ func (m *model) View() string {
 
 func render(sw *SlidingWindow, objs *collectorObjects) {
 
-	columns := []table.Column{
-		{Title: "UID", Width: 5},
-		{Title: "INO", Width: 8},
-		{Title: "NAME", Width: 10},
-		{Title: "READS", Width: 6},
-		{Title: "BYTES", Width: 8},
-		{Title: "WRITES", Width: 6},
-		{Title: "BYTES", Width: 8},
+	w, h, err := term.GetSize(0)
+	if err != nil {
+		fmt.Println("Could not get window size, making best guess")
+		w, h = 80, 25
 	}
+
+	columns := makeColumns(w)
 
 	rows := []table.Row{
 		{"1", "123", "test", "1", "4096", "31", "51283491"},
@@ -123,7 +165,7 @@ func render(sw *SlidingWindow, objs *collectorObjects) {
 		table.WithColumns(columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
-		table.WithHeight(7),
+		table.WithHeight(h-5), // padding
 	)
 
 	s := table.DefaultStyles()
@@ -138,7 +180,7 @@ func render(sw *SlidingWindow, objs *collectorObjects) {
 		Bold(false)
 	t.SetStyles(s)
 
-	m := model{t, sw, objs}
+	m := model{t, sw, objs, w, h}
 	if _, err := tea.NewProgram(&m, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Println("Error running program:", err)
 		os.Exit(1)

@@ -19,6 +19,39 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+/** Helper Functions **/
+
+__u32 get_ipv4(struct svc_rqst *rqstp) {
+    unsigned char addrbuf[16] = {};
+    if (bpf_probe_read_kernel(&addrbuf, sizeof(addrbuf), &rqstp->rq_addr) ==
+        0) { // BPF_CORE_READ doesn't work for rqstp->rq_addr?
+        unsigned short family = 0;
+        __builtin_memcpy(&family, &addrbuf[0], sizeof(family));
+        if (family == 2) { /* AF_INET */
+            __u32 ipv4 = 0;
+            /* sockaddr_in.sin_addr is at offset 4 */
+            __builtin_memcpy(&ipv4, &addrbuf[4], sizeof(ipv4));
+            return ipv4;
+        } else {
+            return 0; // default to 0 if ipv6
+        }
+    } else {
+        return 0; // default to 0 if no ip
+    }
+}
+
+void get_name(char *buf, __u32 buflen, struct dentry *dentry_ptr) {
+    const unsigned char *name_ptr = BPF_CORE_READ(dentry_ptr, d_name.name);
+    if (name_ptr)
+        bpf_probe_read_str(buf, buflen, (const void *)name_ptr);
+}
+
+struct dentry *get_parent_dentry(struct dentry *dentry_ptr) {
+    return BPF_CORE_READ(dentry_ptr, d_parent);
+}
+
+/** End of Helper Functions */
+
 struct key_t {
     __u64 ino;
     __u32 uid;
@@ -63,60 +96,50 @@ int BPF_PROG(write_ops, struct svc_rqst *rqstp,
 
     struct key_t key = {};
 
-    // get ino
+    // get dentry
     struct dentry *dentry_ptr = BPF_CORE_READ(cstate, current_fh.fh_dentry);
     if (!dentry_ptr) {
         bpf_printk("Could not read dentry!\n");
         return 0;
     }
 
+    // get ino
     struct inode *inode_ptr = BPF_CORE_READ(dentry_ptr, d_inode);
     if (!inode_ptr) {
         bpf_printk("Could not read inode!\n");
         return 0;
     }
-
     key.ino = BPF_CORE_READ(inode_ptr, i_ino);
 
     // get filename
-    const unsigned char *name_ptr = BPF_CORE_READ(dentry_ptr, d_name.name);
     char fname[64];
-    if (name_ptr)
-        bpf_probe_read_str(&fname, sizeof(fname), (const void *)name_ptr);
+    get_name(fname, sizeof(fname), dentry_ptr);
 
     // get parent name
-    const unsigned char *pname_ptr =
-        BPF_CORE_READ(dentry_ptr, d_parent, d_name.name);
+    struct dentry *pdentry_ptr = get_parent_dentry(dentry_ptr);
     char pname[64];
-    if (pname_ptr)
-        bpf_probe_read_str(&pname, sizeof(pname), (const void *)pname_ptr);
+    get_name(pname, sizeof(pname), pdentry_ptr);
+
+    // we can also get parent's parent, etc.: get_parent_dentry(pdentry_ptr)
+
+    // send filename to ringbuf
+    struct event ev = {};
+    ev.ino = key.ino;
+    __builtin_memcpy(ev.name, fname, sizeof(fname));
+    __builtin_memcpy(ev.pname, pname, sizeof(pname));
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
 
     // get uid
     key.uid = BPF_CORE_READ(rqstp, rq_cred.cr_uid.val);
 
     // get ipv4
-    unsigned char addrbuf[16] = {};
-    if (bpf_probe_read_kernel(&addrbuf, sizeof(addrbuf), &rqstp->rq_addr) ==
-        0) {
-        unsigned short family = 0;
-        __builtin_memcpy(&family, &addrbuf[0], sizeof(family));
-        if (family == 2) { /* AF_INET */
-            __u32 ipv4 = 0;
-            /* sockaddr_in.sin_addr is at offset 4 */
-            __builtin_memcpy(&ipv4, &addrbuf[4], sizeof(ipv4));
-            key.ipv4 = ipv4;
-        } else {
-            key.ipv4 = 123; // default to 0 if ipv6
-        }
-    } else {
-        key.ipv4 = 0; // default to 0 if no ip
-    }
+    key.ipv4 = get_ipv4(rqstp);
 
     // get bytes
     __u32 bytes = BPF_CORE_READ(u, write.wr_payload.buflen);
-    bpf_printk("nfs write %u to %s\n", bytes, name_ptr);
+    bpf_printk("nfs write %u to %u\n", bytes, key.ino);
 
-    // update map
+    // update map (write metrics)
     struct val_t *val = bpf_map_lookup_elem(&nfs_ops_counts, &key);
     if (val) {
         val->w_requests++;
@@ -128,14 +151,6 @@ int BPF_PROG(write_ops, struct svc_rqst *rqstp,
                              .r_bytes = 0};
         bpf_map_update_elem(&nfs_ops_counts, &key, &init, BPF_ANY);
     }
-
-    // send filename
-    struct event ev = {};
-    ev.ino = key.ino;
-    __builtin_memcpy(ev.name, fname, sizeof(fname));
-    __builtin_memcpy(ev.pname, pname, sizeof(pname));
-
-    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
 
     return 0;
 }
@@ -152,30 +167,42 @@ int BPF_PROG(read_ops, struct svc_rqst *rqstp,
     bpf_printk("READ OPERATION");
     struct key_t key = {};
 
-    // get ino
+    // get dentry
     struct dentry *dentry_ptr = BPF_CORE_READ(cstate, current_fh.fh_dentry);
     if (!dentry_ptr) {
         bpf_printk("Could not read dentry!\n");
         return 0;
     }
 
+    // get ino
     struct inode *inode_ptr = BPF_CORE_READ(dentry_ptr, d_inode);
     if (!inode_ptr) {
         bpf_printk("Could not read inode!\n");
         return 0;
     }
-
     key.ino = BPF_CORE_READ(inode_ptr, i_ino);
 
     // get filename
-    const unsigned char *name_ptr = BPF_CORE_READ(dentry_ptr, d_name.name);
-
     char fname[64];
-    if (name_ptr)
-        bpf_probe_read_str(&fname, sizeof(fname), (const void *)name_ptr);
+    get_name(fname, sizeof(fname), dentry_ptr);
+
+    // get parent name
+    struct dentry *pdentry_ptr = get_parent_dentry(dentry_ptr);
+    char pname[64];
+    get_name(pname, sizeof(pname), pdentry_ptr);
+
+    // send filename to ringbuf
+    struct event ev = {};
+    ev.ino = key.ino;
+    __builtin_memcpy(ev.name, fname, sizeof(fname));
+    __builtin_memcpy(ev.pname, pname, sizeof(pname));
+    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
 
     // get uid
     key.uid = BPF_CORE_READ(rqstp, rq_cred.cr_uid.val);
+
+    // get ipv4
+    key.ipv4 = get_ipv4(rqstp);
 
     // get bytes
     __u32 bytes = BPF_CORE_READ(u, read.rd_length);
@@ -193,13 +220,6 @@ int BPF_PROG(read_ops, struct svc_rqst *rqstp,
                              .w_bytes = 0};
         bpf_map_update_elem(&nfs_ops_counts, &key, &init, BPF_ANY);
     }
-
-    // send filename to ringbuf
-    struct event ev = {};
-    ev.ino = key.ino;
-    __builtin_memcpy(ev.name, fname, sizeof(fname));
-
-    bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
 
     return 0;
 }

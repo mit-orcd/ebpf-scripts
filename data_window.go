@@ -36,7 +36,7 @@ type WindowSummary struct {
 	ordered_ips   []*IpMetrics
 }
 
-func (w WindowSummary) sortUsers() {
+func (w *WindowSummary) sortUsers() {
 	// todo: instead of recreating array, just add new users
 	w.ordered_users = make([]*UserMetrics, 0)
 	for _, user := range w.users {
@@ -44,7 +44,7 @@ func (w WindowSummary) sortUsers() {
 	}
 
 	slices.SortFunc(w.ordered_users, func(a, b *UserMetrics) int {
-		return cmp.Compare(a.usage_total, b.usage_total)
+		return cmp.Compare(b.usage_total, a.usage_total)
 	})
 }
 
@@ -85,14 +85,14 @@ func (um *UserMetrics) sortFiles(orderBy FileSortOrder) {
 	slices.SortFunc(um.ordered_files, func(a, b *FileMetrics) int {
 		switch orderBy {
 		case SortByReadBytes:
-			return cmp.Compare(a.r_bytes, b.r_bytes)
+			return cmp.Compare(b.r_bytes, a.r_bytes)
 		case SortByWriteBytes:
-			return cmp.Compare(a.w_bytes, b.w_bytes)
+			return cmp.Compare(b.w_bytes, a.w_bytes)
 		case SortByTotalBytes:
-			return cmp.Compare(a.r_bytes+a.w_bytes, b.r_bytes+b.w_bytes)
+			return cmp.Compare(b.r_bytes+b.w_bytes, a.r_bytes+a.w_bytes)
 
 		}
-		return cmp.Compare(a.r_bytes+a.w_bytes, b.r_bytes+b.w_bytes)
+		return cmp.Compare(b.r_bytes+b.w_bytes, a.r_bytes+a.w_bytes)
 	})
 }
 

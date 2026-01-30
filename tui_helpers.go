@@ -51,12 +51,71 @@ func parse_ip(ip uint32) string {
 func (m *model) updateUserTable() {
 	// 1. get users and their metrics from data_window
 	// 2. display it
+	m.user_table.SetColumns(makeUserColumns(m.width))
+	m.user_table.SetHeight(m.height - 4) // subtract space for header/footer/borders
 
-	// m.sw.total_summary.users
+	m.sw.total_summary.sortUsers()
+
+	rows := make([]table.Row, 0)
+
+	for _, um := range m.sw.total_summary.ordered_users {
+
+		// uid to username resolution
+		usr := um.uid
+		var username string
+		usrstr := fmt.Sprintf("%d", usr)
+		u, err := user.LookupId(usrstr)
+		if err != nil {
+			// fall back to uid
+			username = usrstr
+		} else {
+			username = u.Username
+		}
+
+		r := table.Row{
+			username,
+			fmt.Sprintf("%d", um.usage_total),
+			"-",
+		}
+		rows = append(rows, r)
+	}
+
+	m.user_table.SetRows(rows)
 
 }
 
 func (m *model) updateTrafficTableWithIP(uid uint32) {
+	m.traffic_table.SetColumns(makeTrafficColumnsWithIP(m.width))
+	m.traffic_table.SetHeight(m.height - 4) // subtract space for header/footer/borders
+
+	user_metric := m.sw.total_summary.users[uid]
+
+	user_metric.sortFiles(SortByTotalBytes)
+
+	rows := make([]table.Row, 0)
+
+	for _, file := range user_metric.ordered_files {
+
+		// ino to filename resolution
+		filename, ok := m.sw.ino_to_filenames[file.ino]
+		if !ok {
+			// fall back to ino
+			filename = fmt.Sprintf("%d", file.ino)
+		}
+
+		r := table.Row{
+			filename,
+			parse_ip(file.ip),
+			fmt.Sprintf("%d", file.r_ops_count),
+			fmt.Sprintf("%d", file.r_bytes),
+			fmt.Sprintf("%d", file.w_ops_count),
+			fmt.Sprintf("%d", file.w_bytes),
+			filename,
+		}
+		rows = append(rows, r)
+	}
+
+	m.traffic_table.SetRows(rows)
 
 }
 

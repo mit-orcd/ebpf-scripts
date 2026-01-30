@@ -54,22 +54,29 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case updateTickMsg:
 		m.sw.total_summary.UpdateMetrics(m.objs.NfsOpsCounts)
-		m.updateTables()
+		// m.updateTables()
+		m.updateUserTable()
 		return m, tea.Batch(
 			updateTableEvery(1 * time.Second),
 		)
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "esc":
-			// this toggles wether table can receive user input
+		case "esc", "tab":
 			if m.user_table.Focused() {
 				m.user_table.Blur()
+				m.traffic_table.Focus()
 			} else {
 				m.user_table.Focus()
+				m.traffic_table.Blur()
 			}
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "enter":
+			if m.user_table.Focused() {
+				idx := m.user_table.Cursor()
+				uid := m.sw.total_summary.ordered_users[idx].uid
+				m.updateTrafficTableWithIP(uid)
+			}
 			return m, tea.Batch(
 				tea.Printf("Let's go to %s!", m.user_table.SelectedRow()[1]),
 			)
@@ -77,7 +84,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.updateTables()
+		// m.updateTables()
+		m.updateUserTable()
 	}
 
 	m.user_table, cmd = m.user_table.Update(msg) // table keymaps

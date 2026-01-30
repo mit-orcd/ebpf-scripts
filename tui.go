@@ -73,7 +73,7 @@ func updateTable(m *model) tea.Msg {
 
 	rows := make([]table.Row, 0)
 
-	for usr, files := range m.sw.total_summary.m {
+	for usr, umetrics := range m.sw.total_summary.users {
 
 		// uid to username resolution
 		var username string
@@ -86,13 +86,13 @@ func updateTable(m *model) tea.Msg {
 			username = u.Username
 		}
 
-		for ino, metrics := range files.files {
+		for ino_ip, metrics := range umetrics.files {
 
 			// ino to filename resolution
-			filename, ok := m.sw.ino_to_filenames[ino]
+			filename, ok := m.sw.ino_to_filenames[ino_ip.ino]
 			if !ok {
 				// fall back to ino
-				filename = fmt.Sprintf("%d", ino)
+				filename = fmt.Sprintf("%d", ino_ip.ino)
 			}
 
 			r := table.Row{
@@ -157,7 +157,7 @@ func (m *model) View() string {
 	return joint + "\n" + helpView + "\n"
 }
 
-func render(sw *SlidingWindow, objs *collectorObjects) {
+func bubble_render(sw *SlidingWindow, objs *collectorObjects) {
 
 	w, h, err := term.GetSize(0)
 	if err != nil {

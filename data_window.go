@@ -11,26 +11,46 @@ import (
 )
 
 type SlidingWindow struct {
-	time_per_update_ms   int
-	total_display_time_s int
+	time_per_update_ms int
 
-	windows              []WindowSummary
-	start_window         int // index of oldest window
-	current_window       int // index of newest window
-	windows_max_quantity int // maximum number of windows to store
+	// Window Logic to implement later
+	// total_display_time_s int
+	// windows              []WindowSummary
+	// start_window         int // index of oldest window
+	// current_window       int // index of newest window
+	// windows_max_quantity int // maximum number of windows to store
 
 	total_summary WindowSummary
 
 	ino_to_filenames map[uint64]string
 }
 
+/* Structures to store all aggregated metrics */
 type WindowSummary struct {
-	// m map[collectorKeyT]collectorValT
-	m map[uint32]UserMetrics // user --> UserMetrics
+	users map[uint32]*UserMetrics // uid --> UserMetrics --(ino, ip)---> FileMetrics
+	ips   map[uint32]*IpMetrics   // ip ---> IpMetrics ----(ino, uid)--> FileMetrics
 }
 
+type InoIpKey struct {
+	ino uint64
+	ip  uint32
+}
+
+type InoUidKey struct {
+	ino uint64
+	uid uint32
+}
+
+// Metrics from a specific user
 type UserMetrics struct {
-	files map[uint64]FileMetrics // ino --> Filemetrics
+	files map[InoIpKey]*FileMetrics
+	usage uint64
+}
+
+// Metrics from a specific ip
+type IpMetrics struct {
+	files map[InoUidKey]*FileMetrics
+	usage uint64
 }
 
 type FileMetrics struct {
@@ -42,7 +62,8 @@ type FileMetrics struct {
 
 func InitWindow() SlidingWindow {
 	sw := SlidingWindow{}
-	sw.total_summary.m = make(map[uint32]UserMetrics)
+	sw.total_summary.users = make(map[uint32]*UserMetrics)
+	sw.total_summary.ips = make(map[uint32]*IpMetrics)
 	sw.ino_to_filenames = make(map[uint64]string)
 
 	return sw
@@ -73,11 +94,12 @@ func (sw SlidingWindow) MaintainInodeResolution(file_ringbuf *ebpf.Map) {
 			continue
 		}
 
-		// Log to file resolution map
-		sw.ino_to_filenames[event.Ino] = string(event.Pname[:bytes.IndexByte(event.Pname[:], 0)]) + "/" + string(event.Name[:bytes.IndexByte(event.Name[:], 0)]) // better way to do this?
+		// Log to file resolution map (better way to do this?)
+		sw.ino_to_filenames[event.Ino] = string(event.Pname[:bytes.IndexByte(event.Pname[:], 0)]) + "/" + string(event.Name[:bytes.IndexByte(event.Name[:], 0)])
 	}
 }
 
+// Updates window aggregated data given an ebpf map with new data to collect
 func (w WindowSummary) UpdateTotalWindow(ebpf_map *ebpf.Map) {
 	iterator := ebpf_map.Iterate()
 
@@ -100,26 +122,41 @@ func (w WindowSummary) UpdateTotalWindow(ebpf_map *ebpf.Map) {
 
 		//fmt.Printf("UID: %d | Inode: %d | Requests: %d | Total Bytes: %d\n", k.Uid, k.Ino, val.W_requests, val.W_bytes)
 
-		um, ok := w.m[k.Uid]
+		/** Add data to user metrics **/
+		user_metrics, ok := w.users[k.Uid]
 		if !ok {
-			//log.Print("Created new user")
-			um = UserMetrics{
-				files: make(map[uint64]FileMetrics),
+			user_metrics = &UserMetrics{
+				files: make(map[InoIpKey]*FileMetrics),
 			}
 		}
-		if um.files == nil {
-			um.files = make(map[uint64]FileMetrics)
+		if user_metrics.files == nil {
+			user_metrics.files = make(map[InoIpKey]*FileMetrics)
 		}
-		fm, ok := um.files[k.Ino]
+		file_ip_key := InoIpKey{ino: k.Ino, ip: k.Ipv4}
+		file_metrics, ok := user_metrics.files[file_ip_key]
 		if !ok {
-			fm = FileMetrics{}
+			file_metrics = &FileMetrics{}
 		}
-		fm.w_ops_count += val.W_requests
-		fm.w_bytes += val.W_bytes
-		fm.r_ops_count += val.R_requests
-		fm.r_bytes += val.R_bytes
+		file_metrics.w_ops_count += val.W_requests
+		file_metrics.w_bytes += val.W_bytes
+		file_metrics.r_ops_count += val.R_requests
+		file_metrics.r_bytes += val.R_bytes
 
-		um.files[k.Ino] = fm
-		w.m[k.Uid] = um
+		user_metrics.files[file_ip_key] = file_metrics
+		w.users[k.Uid] = user_metrics
+
+		/** Add data to ip metrics **/
+		ip_metrics, ok := w.ips[k.Ipv4]
+		if !ok {
+			ip_metrics = &IpMetrics{
+				files: make(map[InoUidKey]*FileMetrics),
+			}
+		}
+		if ip_metrics.files == nil {
+			ip_metrics.files = make(map[InoUidKey]*FileMetrics)
+		}
+		file_uid_key := InoUidKey{ino: k.Ino, uid: k.Uid}
+		ip_metrics.files[file_uid_key] = file_metrics // utilize same file_metrics
+		w.ips[k.Ipv4] = ip_metrics
 	}
 }

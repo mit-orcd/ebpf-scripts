@@ -8,6 +8,9 @@
  *
  * then utilize ebpf-go to build
  *      `go generate && go build`
+ *
+ * Also, remember to have kernel-devel and libbpf-devel headers installed
+ *
  **/
 
 #include "nfsd-btf.h"
@@ -92,13 +95,22 @@ int BPF_PROG(write_ops, struct svc_rqst *rqstp,
     key.uid = BPF_CORE_READ(rqstp, rq_cred.cr_uid.val);
 
     // get ipv4
-    // unsigned char addrbuf[16] = {};
-    // struct __kernel_sockaddr_storage sa = BPF_CORE_READ(rqstp, rq_addr);
-    // if (bpf_probe_read_kernel(&addrbuf, sizeof(addrbuf), &sa) == 0) {
-    //     unsigned short family = 0;
-    // } else {
-    //     key.ipv4 = 0; // default to no ip
-    // }
+    unsigned char addrbuf[16] = {};
+    if (bpf_probe_read_kernel(&addrbuf, sizeof(addrbuf), &rqstp->rq_addr) ==
+        0) {
+        unsigned short family = 0;
+        __builtin_memcpy(&family, &addrbuf[0], sizeof(family));
+        if (family == 2) { /* AF_INET */
+            __u32 ipv4 = 0;
+            /* sockaddr_in.sin_addr is at offset 4 */
+            __builtin_memcpy(&ipv4, &addrbuf[4], sizeof(ipv4));
+            key.ipv4 = ipv4;
+        } else {
+            key.ipv4 = 123; // default to 0 if ipv6
+        }
+    } else {
+        key.ipv4 = 0; // default to 0 if no ip
+    }
 
     // get bytes
     __u32 bytes = BPF_CORE_READ(u, write.wr_payload.buflen);

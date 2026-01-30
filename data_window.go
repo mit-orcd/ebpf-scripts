@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"errors"
 	"log"
+	"slices"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
@@ -29,6 +31,21 @@ type SlidingWindow struct {
 type WindowSummary struct {
 	users map[uint32]*UserMetrics // uid --> UserMetrics --(ino, ip)---> FileMetrics
 	ips   map[uint32]*IpMetrics   // ip ---> IpMetrics ----(ino, uid)--> FileMetrics
+
+	ordered_users []*UserMetrics // default: ordered by highest usage
+	ordered_ips   []*IpMetrics
+}
+
+func (w WindowSummary) sortUsers() {
+	// todo: instead of recreating array, just add new users
+	w.ordered_users = make([]*UserMetrics, 0)
+	for _, user := range w.users {
+		w.ordered_users = append(w.ordered_users, user)
+	}
+
+	slices.SortFunc(w.ordered_users, func(a, b *UserMetrics) int {
+		return cmp.Compare(a.usage_total, b.usage_total)
+	})
 }
 
 type InoIpKey struct {
@@ -43,14 +60,49 @@ type InoUidKey struct {
 
 // Metrics from a specific user
 type UserMetrics struct {
-	files map[InoIpKey]*FileMetrics
-	usage uint64
+	files            map[InoIpKey]*FileMetrics
+	usage_total      uint64
+	usage_normalized float32
+
+	ordered_files []*FileMetrics
+	uid           uint32
+}
+
+type FileSortOrder int
+
+const (
+	SortByReadBytes FileSortOrder = iota
+	SortByWriteBytes
+	SortByTotalBytes
+)
+
+func (um *UserMetrics) sortFiles(orderBy FileSortOrder) {
+	// todo: instead of recreating entire array, just add new files (i.e. need to keep track of what files are new)
+	um.ordered_files = make([]*FileMetrics, 0)
+	for _, file := range um.files {
+		um.ordered_files = append(um.ordered_files, file)
+	}
+	slices.SortFunc(um.ordered_files, func(a, b *FileMetrics) int {
+		switch orderBy {
+		case SortByReadBytes:
+			return cmp.Compare(a.r_bytes, b.r_bytes)
+		case SortByWriteBytes:
+			return cmp.Compare(a.w_bytes, b.w_bytes)
+		case SortByTotalBytes:
+			return cmp.Compare(a.r_bytes+a.w_bytes, b.r_bytes+b.w_bytes)
+
+		}
+		return cmp.Compare(a.r_bytes+a.w_bytes, b.r_bytes+b.w_bytes)
+	})
 }
 
 // Metrics from a specific ip
 type IpMetrics struct {
-	files map[InoUidKey]*FileMetrics
-	usage uint64
+	files            map[InoUidKey]*FileMetrics
+	usage_total      uint64
+	usage_normalized float32
+
+	ordered_files []*FileMetrics
 }
 
 type FileMetrics struct {
@@ -58,6 +110,9 @@ type FileMetrics struct {
 	r_bytes     uint64
 	w_ops_count uint64
 	w_bytes     uint64
+	ino         uint64
+	ip          uint32
+	uid         uint32
 }
 
 func InitWindow() SlidingWindow {
@@ -70,7 +125,7 @@ func InitWindow() SlidingWindow {
 }
 
 // Continually populates sw.ino_to_filenames using the ebpf ringbuffer
-func (sw SlidingWindow) MaintainInodeResolution(file_ringbuf *ebpf.Map) {
+func (sw *SlidingWindow) MaintainInodeResolution(file_ringbuf *ebpf.Map) {
 	rd, err := ringbuf.NewReader(file_ringbuf)
 	if err != nil {
 		log.Fatalf("opening ringbuf reader: %s", err)
@@ -100,7 +155,7 @@ func (sw SlidingWindow) MaintainInodeResolution(file_ringbuf *ebpf.Map) {
 }
 
 // Updates window aggregated data given an ebpf map with new data to collect
-func (w WindowSummary) UpdateMetrics(ebpf_map *ebpf.Map) {
+func (w *WindowSummary) UpdateMetrics(ebpf_map *ebpf.Map) {
 	iterator := ebpf_map.Iterate()
 
 	var keys []collectorKeyT
@@ -128,7 +183,11 @@ func (w WindowSummary) UpdateMetrics(ebpf_map *ebpf.Map) {
 			user_metrics = &UserMetrics{
 				files: make(map[InoIpKey]*FileMetrics),
 			}
+			w.users[k.Uid] = user_metrics
+			user_metrics.uid = k.Uid
 		}
+
+		// Update FileMetrics
 		if user_metrics.files == nil {
 			user_metrics.files = make(map[InoIpKey]*FileMetrics)
 		}
@@ -136,14 +195,18 @@ func (w WindowSummary) UpdateMetrics(ebpf_map *ebpf.Map) {
 		file_metrics, ok := user_metrics.files[file_ip_key]
 		if !ok {
 			file_metrics = &FileMetrics{}
+			file_metrics.ino = k.Ino
+			file_metrics.ip = k.Ipv4
+			file_metrics.uid = k.Uid
 		}
 		file_metrics.w_ops_count += val.W_requests
 		file_metrics.w_bytes += val.W_bytes
 		file_metrics.r_ops_count += val.R_requests
 		file_metrics.r_bytes += val.R_bytes
 
+		// Update UserMetrics
 		user_metrics.files[file_ip_key] = file_metrics
-		w.users[k.Uid] = user_metrics
+		user_metrics.usage_total += val.W_bytes + val.R_bytes
 
 		/** Add data to ip metrics **/
 		ip_metrics, ok := w.ips[k.Ipv4]

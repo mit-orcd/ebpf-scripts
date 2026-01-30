@@ -100,7 +100,7 @@ func (sw SlidingWindow) MaintainInodeResolution(file_ringbuf *ebpf.Map) {
 }
 
 // Updates window aggregated data given an ebpf map with new data to collect
-func (w WindowSummary) UpdateTotalWindow(ebpf_map *ebpf.Map) {
+func (w WindowSummary) UpdateMetrics(ebpf_map *ebpf.Map) {
 	iterator := ebpf_map.Iterate()
 
 	var keys []collectorKeyT

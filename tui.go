@@ -16,9 +16,7 @@ import (
 
 /** If Styles do not display in TMUX:
 
-Go to or create ~/.tmux.conf
-and append:
-
+Go or create ~/.tmux.conf and append:
 ```
 set -g default-terminal "tmux-256color"
 set -g terminal-overrides 'xterm*:Tc'
@@ -50,28 +48,16 @@ func updateTableEvery(delay time.Duration) tea.Cmd {
 	})
 }
 
-func makeColumns(width int) []table.Column {
-	return []table.Column{
-		{Title: "USER", Width: width * 5 / 100},
-		{Title: "PATH", Width: width * 15 / 100},
-		{Title: "READS", Width: width * 5 / 100},
-		{Title: "RBYTES", Width: width * 5 / 100},
-		{Title: "WRITES", Width: width * 5 / 100},
-		{Title: "WBYTES", Width: width * 5 / 100},
-	}
-}
+func (m *model) updateTables() tea.Msg {
 
-func updateTable(m *model) tea.Msg {
-
-	m.user_table.SetColumns(makeColumns(m.width))
+	m.user_table.SetColumns(makeUserColumns(m.width))
 	m.user_table.SetHeight(m.height - 4) // subtract space for header/footer/borders
 
-	m.traffic_table.SetColumns(makeColumns(m.width))
+	m.traffic_table.SetColumns(makeTrafficColumnsWithIP(m.width))
 	m.traffic_table.SetHeight(m.height - 4) // subtract space for header/footer/borders
 
-	m.sw.total_summary.UpdateTotalWindow(m.objs.NfsOpsCounts)
-
-	rows := make([]table.Row, 0)
+	rows_users := make([]table.Row, 0)
+	rows_traffic := make([]table.Row, 0)
 
 	for usr, umetrics := range m.sw.total_summary.users {
 
@@ -95,19 +81,28 @@ func updateTable(m *model) tea.Msg {
 				filename = fmt.Sprintf("%d", ino_ip.ino)
 			}
 
-			r := table.Row{
+			r_user := table.Row{
 				username,
+				"",
+				"",
+			}
+			rows_users = append(rows_users, r_user)
+
+			r_traffic := table.Row{
 				filename,
+				parse_ip(ino_ip.ip),
 				fmt.Sprintf("%d", metrics.r_ops_count),
 				fmt.Sprintf("%d", metrics.r_bytes),
 				fmt.Sprintf("%d", metrics.w_ops_count),
 				fmt.Sprintf("%d", metrics.w_bytes),
+				filename,
 			}
-			rows = append(rows, r)
+			rows_traffic = append(rows_traffic, r_traffic)
 		}
 	}
 
-	m.user_table.SetRows(rows)
+	m.user_table.SetRows(rows_users)
+	m.traffic_table.SetRows(rows_traffic)
 
 	return nil
 }
@@ -118,7 +113,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case updateTickMsg:
-		updateTable(m)
+		m.sw.total_summary.UpdateMetrics(m.objs.NfsOpsCounts)
+		m.updateTables()
 		return m, tea.Batch(
 			updateTableEvery(1 * time.Second),
 		)
@@ -141,7 +137,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		updateTable(m)
+		m.updateTables()
 	}
 
 	m.user_table, cmd = m.user_table.Update(msg) // table keymaps
@@ -165,21 +161,22 @@ func bubble_render(sw *SlidingWindow, objs *collectorObjects) {
 		w, h = 80, 25
 	}
 
-	columns := makeColumns(w)
+	user_columns := makeUserColumns(w)
+	traffic_columns := makeTrafficColumnsWithIP(w)
 
 	rows := []table.Row{
-		{"1", "test", "1", "4096", "31", "51283491"},
+		// {"1", "test", "1", "4096", "31", "51283491", "path"},
 	}
 
 	users_table := table.New(
-		table.WithColumns(columns),
+		table.WithColumns(user_columns),
 		table.WithRows(rows),
 		table.WithFocused(true),
 		table.WithHeight(h-5), // padding
 	)
 
 	traffic_table := table.New(
-		table.WithColumns(columns),
+		table.WithColumns(traffic_columns),
 		table.WithRows(rows),
 		table.WithFocused(false),
 		table.WithHeight(h-5),
